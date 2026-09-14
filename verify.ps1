@@ -4,44 +4,26 @@
 
     .DESCRIPTION
     The gate xgit runs (Test-XmipSelfVerifyingModule): exit 0 when the module
-    builds and the probe passes, non-zero otherwise. One compiler everywhere,
-    zig cc, declared in prerequisite.toml as `c`. The ABI header comes from
-    xmip-core-abi, found in the estate when this repository is mounted there
-    and through XMIP_ABI_INCLUDE otherwise.
+    builds and the probe passes, non-zero otherwise. The probe and the build
+    are the capability's, shared by every language technology (ADR-0044):
+    probe/verify.ps1 beside this repository's mount in the estate, or where
+    XMIP_CONTRACT_PROBE points.
 #>
 [CmdletBinding()]
 param()
 
+Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
-Set-Location -LiteralPath $PSScriptRoot
 
-if (-not (Get-Command zig -ErrorAction SilentlyContinue)) {
-    Write-Host 'FAILED. zig is not installed; prerequisite.toml declares it as c.'
+[string] $probe = $env:XMIP_CONTRACT_PROBE
+if ([string]::IsNullOrWhiteSpace($probe)) {
+    $probe = Join-Path $PSScriptRoot '..' 'probe'
+}
+[string] $verify = Join-Path $probe 'verify.ps1'
+if (-not (Test-Path -LiteralPath $verify)) {
+    Write-Host "FAILED. The capability's probe is not at $probe; set XMIP_CONTRACT_PROBE."
     exit 2
 }
 
-[string] $include = $env:XMIP_ABI_INCLUDE
-if (-not $include) {
-    $include = Join-Path $PSScriptRoot '..' '..' '..' 'foundation' 'abi' 'include'
-}
-if (-not (Test-Path -LiteralPath (Join-Path $include 'xmip_module.h'))) {
-    Write-Host "FAILED. xmip_module.h not found under $include; set XMIP_ABI_INCLUDE."
-    exit 2
-}
-
-New-Item -ItemType Directory -Force -Path build | Out-Null
-[string] $library = if ($IsWindows) { 'xmip_core_contract_c.dll' }
-    elseif ($IsMacOS) { 'libxmip_core_contract_c.dylib' } else { 'libxmip_core_contract_c.so' }
-[string] $probe = if ($IsWindows) { 'probe.exe' } else { 'probe' }
-
-Write-Host "   zig cc -shared -> build/$library"
-& zig cc -shared -O2 -fvisibility=hidden -Wall -Wextra -Werror -I $include `
-    src/contract.c -o (Join-Path build $library)
-if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-
-Write-Host "   zig cc -> build/$probe"
-& zig cc -O1 -Wall -Wextra -Werror -I $include src/contract.c tests/probe.c -o (Join-Path build $probe)
-if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-
-& (Join-Path $PSScriptRoot 'build' $probe)
+& $verify -Directory $PSScriptRoot -Compiler cc -Source src/contract.c -Standard c
 exit $LASTEXITCODE
